@@ -1,0 +1,51 @@
+[metadata]
+name = "sangraha_verified_sample_unigram_v1"
+description = "Joint English, Hindi, and Marathi SentencePiece Unigram tokenizer trained on the first 100,000 verified Sangraha rows per language."
+
+[corpus]
+paths = [
+    "/home/harshad/Workspace/Learning/DeepLearning/Datasets/ai4bharat/sangraha/samples/verified/eng/sangraha-verified-eng-first-100000.parquet",
+    "/home/harshad/Workspace/Learning/DeepLearning/Datasets/ai4bharat/sangraha/samples/verified/hin/sangraha-verified-hin-first-100000.parquet",
+    "/home/harshad/Workspace/Learning/DeepLearning/Datasets/ai4bharat/sangraha/samples/verified/mar/sangraha-verified-mar-first-100000.parquet",
+]
+text_column = "text"
+batch_rows = 8192
+input_sentence_size = 300000
+shuffle_input_sentence = true
+
+[trainer]
+model_type = "unigram"
+vocab_size = 16384
+character_coverage = 0.9995
+byte_fallback = true
+seed_sentencepiece_size = 200000
+num_threads = 16
+max_sentence_length = 16384
+hard_vocab_limit = true
+
+# Fundamental tokenizer tokens.
+unk_id = 0
+bos_id = 1
+eos_id = 2
+pad_id = 3
+unk_piece = "<unk>"
+bos_piece = "<bos>"
+eos_piece = "<eos>"
+pad_piece = "<pad>"
+
+# Application / protocol tokens. These remain indivisible when present in text.
+user_defined_symbols = [
+    "<|system|>",
+    "<|user|>",
+    "<|assistant|>",
+    "<|thinking|>",
+    "<|end_thinking|>",
+    "<|tool_call|>",
+    "<|end_tool_call|>",
+    "<|tool_result|>",
+    "<|end_tool_result|>",
+]
+
+[output]
+directory = "artifacts/tokenizers/sangraha_verified_sample_unigram_v1"
+model_basename = "tokenizer"
