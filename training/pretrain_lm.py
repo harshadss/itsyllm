@@ -18,7 +18,7 @@ import os
 import random
 import sys
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -52,6 +52,7 @@ class TrainConfig:
     tokenizer_path: Path
     output_dir: Path
     model_config: str
+    context_length: int | None
     max_train_tokens: int
     batch_size: int
     gradient_accumulation_steps: int
@@ -74,6 +75,11 @@ def parse_args() -> TrainConfig:
     parser.add_argument("--tokenizer", required=True, type=Path, dest="tokenizer_path", help="SentencePiece model or artifact directory.")
     parser.add_argument("--output-dir", required=True, type=Path, help="Directory for the one rolling checkpoint.")
     parser.add_argument("--model-config", default="extra-small", choices=("smoke", "extra-small", "extra-small-gqa"))
+    parser.add_argument(
+        "--context-length",
+        type=int,
+        help="Override the context length for this run (defaults to the selected model preset).",
+    )
     parser.add_argument("--max-train-tokens", required=True, type=int)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=16)
@@ -99,6 +105,8 @@ def parse_args() -> TrainConfig:
             parser.error(f"--{name.replace('_', '-')} must be positive")
     if args.min_learning_rate < 0 or args.num_workers < 0:
         parser.error("minimum learning rate and workers cannot be negative")
+    if args.context_length is not None and args.context_length <= 0:
+        parser.error("--context-length must be positive")
     if args.min_learning_rate > args.learning_rate:
         parser.error("--min-learning-rate cannot exceed --learning-rate")
     return TrainConfig(**vars(args))
@@ -238,6 +246,8 @@ def train(config: TrainConfig) -> None:
     if tokenizer.bos_id() < 0:
         raise ValueError("Tokenizer must define a BOS ID.")
     model_config = model_config_from_name(config.model_config, tokenizer.vocab_size())
+    if config.context_length is not None:
+        model_config = replace(model_config, max_context_length=config.context_length)
     dataset = RandomWindowDataset(config.data_path.resolve(), model_config.max_context_length, tokenizer.bos_id(), config.seed)
     if dataset.metadata["tokenizer_vocab_size"] != tokenizer.vocab_size():
         raise ValueError("Dataset vocabulary size does not match the tokenizer.")
@@ -264,6 +274,7 @@ def train(config: TrainConfig) -> None:
         trained_tokens, optimizer_steps = load_checkpoint(config.resume, model, optimizer)
         print(f"Resumed from {config.resume} at {trained_tokens:,} tokens.")
     training_model = torch.compile(model) if config.compile_model else model
+    torch.cuda.reset_peak_memory_stats(device)
 
     checkpoint_path = config.output_dir / "checkpoint.pt"
     next_log_tokens = trained_tokens + config.log_every_tokens
@@ -301,6 +312,15 @@ def train(config: TrainConfig) -> None:
             optimizer.step()
             optimizer.zero_grad(set_to_none=True)
             optimizer_steps += 1
+            if optimizer_steps == 1:
+                gib = 1024**3
+                print(
+                    "GPU memory after first optimizer step: "
+                    f"allocated={torch.cuda.memory_allocated(device) / gib:.2f} GiB "
+                    f"reserved={torch.cuda.memory_reserved(device) / gib:.2f} GiB "
+                    f"peak_allocated={torch.cuda.max_memory_allocated(device) / gib:.2f} GiB "
+                    f"peak_reserved={torch.cuda.max_memory_reserved(device) / gib:.2f} GiB"
+                )
 
             if trained_tokens >= next_log_tokens:
                 elapsed = time.monotonic() - started_at

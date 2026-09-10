@@ -67,8 +67,7 @@ def main() -> None:
     logits = args.batch_size * context_length * config.vocab_size * BF16_BYTES
     sequence_memory = checkpointed_hidden_states + logits
     workspace = max(BYTES_PER_GIB // 2, sequence_memory // 2)
-    training_modeled_peak = training_persistent + autocast_weight_cache + sequence_memory + workspace
-    training_headroom = max(BYTES_PER_GIB, training_modeled_peak // 4)
+    training_tensor_lower_bound = training_persistent + autocast_weight_cache + sequence_memory + workspace
 
     inference_workspace = max(BYTES_PER_GIB // 4, args.batch_size * config.hidden_size * context_length * BF16_BYTES)
     inference_resident = bf16_weights + kv_cache
@@ -86,16 +85,16 @@ def main() -> None:
     print(f"  Resident model + cache: {gibibytes(inference_resident):.2f} GiB")
     print(f"  Approximate peak with workspace: {gibibytes(inference_peak):.2f} GiB")
     print()
-    print("Training estimate (BF16 autocast, FP32 parameters, FP32 AdamW, activation checkpointing):")
+    print("Training tensor lower bound (BF16 autocast, FP32 parameters, FP32 AdamW, activation checkpointing):")
     print(f"  Parameters + gradients + AdamW moments: {gibibytes(training_persistent):.2f} GiB")
     print(f"  BF16 autocast weight cache: {gibibytes(autocast_weight_cache):.2f} GiB")
     print(f"  Checkpointed hidden states: {gibibytes(checkpointed_hidden_states):.2f} GiB")
     print(f"  Logits: {gibibytes(logits):.2f} GiB")
-    print(f"  Modeled peak: {gibibytes(training_modeled_peak):.2f} GiB")
-    print(f"  Plan for at least: {gibibytes(training_modeled_peak + training_headroom):.2f} GiB")
+    print(f"  Accounted tensors and nominal workspace: {gibibytes(training_tensor_lower_bound):.2f} GiB")
     print()
-    print("These are ballpark figures. They assume compiled FlexAttention, so no dense attention matrix is stored.")
-    print("CUDA allocator state, compilation, and kernels can raise the actual peak.")
+    print("This is not a VRAM-fit prediction. It omits backward-pass intermediates, cross-entropy")
+    print("workspaces, FlexAttention/Triton buffers, torch.compile/CUDA-graph pools, and allocator")
+    print("fragmentation. Benchmark the exact batch size, context length, and compilation settings.")
 
 
 if __name__ == "__main__":

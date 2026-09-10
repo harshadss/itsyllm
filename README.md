@@ -46,13 +46,16 @@ uv run python training/pretrain_lm.py \
   --data artifacts/datasets/sangraha-eng.bin \
   --tokenizer artifacts/tokenizers/sangraha_verified_sample_unigram_v1 \
   --output-dir artifacts/checkpoints/first-run \
-  --model-config extra-small \
-  --max-train-tokens 1000000000
+  --model-config extra-small-gqa \
+  --context-length 4096 \
+  --max-train-tokens 2500000000 \
+  --warmup-tokens 50000000
 ```
 
 `extra-small` is the first 8,192-token model: 16 layers, hidden size 768, 12 query heads of 64
 dimensions each, and one KV head (MQA). Use `extra-small-gqa` for three KV heads (one KV head per
-four query heads), or `smoke` for a short functional test. The trainer
+four query heads), or `smoke` for a short functional test. Pass `--context-length` to make a
+run-specific context-length override; the preset itself remains 8,192 tokens. The trainer
 uses BF16 autocast, FP32 parameters and optimizer state, activation checkpointing, `torch.compile`,
 pinned-memory data loading, and one rolling checkpoint at `checkpoint.pt`. Checkpoints default to
 once per 500 million training tokens to limit disk use.
