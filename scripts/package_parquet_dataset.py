@@ -73,7 +73,9 @@ def package(args: argparse.Namespace) -> None:
     bos_id, eos_id = tokenizer.bos_id(), tokenizer.eos_id()
     if bos_id < 0 or eos_id < 0:
         raise ValueError("Tokenizer must define both BOS and EOS IDs.")
-    if tokenizer.vocab_size() > np.iinfo(np.int16).max:
+    # IDs are zero-based: a 32,768-piece vocabulary uses IDs 0 through 32,767,
+    # which is exactly the range of the signed int16 on-disk format.
+    if tokenizer.vocab_size() - 1 > np.iinfo(np.int16).max:
         raise ValueError("Tokenizer vocabulary exceeds the signed int16 dataset format.")
 
     output = args.output.resolve()
