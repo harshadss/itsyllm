@@ -4,7 +4,7 @@
 Examples:
     uv run python scripts/model_memory_report.py mqa
     uv run python scripts/model_memory_report.py gqa --batch-size 4
-    uv run python scripts/model_memory_report.py small --vocab-size 32000 --context-length 4096
+    uv run python scripts/model_memory_report.py extra-small --vocab-size 32000 --context-length 4096
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ def gibibytes(byte_count: int | float) -> float:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("model_name", help="Model name: smoke, small, small_gqa, mqa, or gqa.")
+    parser.add_argument("model_name", help="Model name: smoke, extra-small, extra-small-gqa, mqa, or gqa.")
     parser.add_argument("--vocab-size", type=int, default=16_384, help="Vocabulary size (default: 16384).")
     parser.add_argument("--batch-size", type=int, default=1, help="Training micro-batch or concurrent inference sequences (default: 1).")
     parser.add_argument("--context-length", type=int, help="Context length override. Defaults to the model preset.")

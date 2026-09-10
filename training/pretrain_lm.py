@@ -6,7 +6,7 @@ Example:
       --data artifacts/datasets/example.bin \
       --tokenizer artifacts/tokenizers/example \
       --output-dir artifacts/checkpoints/example \
-      --model-config small --max-train-tokens 1000000000
+      --model-config extra-small --max-train-tokens 1000000000
 """
 
 from __future__ import annotations
@@ -73,7 +73,7 @@ def parse_args() -> TrainConfig:
     parser.add_argument("--data", required=True, type=Path, dest="data_path", help="Packager .bin output.")
     parser.add_argument("--tokenizer", required=True, type=Path, dest="tokenizer_path", help="SentencePiece model or artifact directory.")
     parser.add_argument("--output-dir", required=True, type=Path, help="Directory for the one rolling checkpoint.")
-    parser.add_argument("--model-config", default="small", choices=("smoke", "small", "small_gqa"))
+    parser.add_argument("--model-config", default="extra-small", choices=("smoke", "extra-small", "extra-small-gqa"))
     parser.add_argument("--max-train-tokens", required=True, type=int)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=16)

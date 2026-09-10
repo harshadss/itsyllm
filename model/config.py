@@ -31,32 +31,32 @@ MODEL_PRESETS = {
     "smoke": {
         "hidden_size": 128,
         "num_layers": 2,
-        "num_attention_heads": 4,
+        "num_attention_heads": 2,
         "num_key_value_heads": 1,
         "intermediate_size": 352,
         "max_context_length": 128,
     },
-    "small": {
-        "hidden_size": 1024,
+    "extra-small": {
+        "hidden_size": 768,
         "num_layers": 16,
-        "num_attention_heads": 32,
+        "num_attention_heads": 12,
         "num_key_value_heads": 1,
-        "intermediate_size": 2816,
+        "intermediate_size": 2048,
         "max_context_length": 8192,
     },
-    "small_gqa": {
-        "hidden_size": 1024,
+    "extra-small-gqa": {
+        "hidden_size": 768,
         "num_layers": 16,
-        "num_attention_heads": 32,
-        "num_key_value_heads": 4,
-        "intermediate_size": 2816,
+        "num_attention_heads": 12,
+        "num_key_value_heads": 3,
+        "intermediate_size": 2048,
         "max_context_length": 8192,
     },
 }
 
 MODEL_CONFIG_ALIASES = {
-    "mqa": "small",
-    "gqa": "small_gqa",
+    "mqa": "extra-small",
+    "gqa": "extra-small-gqa",
 }
 
 
