@@ -1,0 +1,55 @@
+[metadata]
+name = "sangraha_ultrafineweb_l3_en_indic_unigram_v1"
+description = "English, Hindi, and Marathi SentencePiece Unigram tokenizer trained on the one-million-row Sangraha verified samples plus the one-million-row English Ultra-FineWeb-L3 QA and Multi-Style samples."
+
+[corpus]
+paths = [
+    "/home/harshad/Workspace/Learning/DeepLearning/Datasets/ai4bharat/sangraha/samples/verified/eng/sangraha-verified-eng-first-1000000.parquet",
+    "/home/harshad/Workspace/Learning/DeepLearning/Datasets/ai4bharat/sangraha/samples/verified/hin/sangraha-verified-hin-first-1000000.parquet",
+    "/home/harshad/Workspace/Learning/DeepLearning/Datasets/ai4bharat/sangraha/samples/verified/mar/sangraha-verified-mar-first-1000000.parquet",
+    "/home/harshad/Workspace/Learning/DeepLearning/Datasets/openbmb/ultra-fineweb-l3/samples/Ultra-FineWeb-L3-en-QA/Ultra-FineWeb-L3-en-QA-first-1000000.parquet",
+    "/home/harshad/Workspace/Learning/DeepLearning/Datasets/openbmb/ultra-fineweb-l3/samples/Ultra-FineWeb-L3-en-Multi-Style/Ultra-FineWeb-L3-en-Multi-Style-first-1000000.parquet",
+]
+text_column = "text"
+batch_rows = 8192
+# SentencePiece samples this many rows uniformly while scanning all five files.
+# This bounds Unigram's normalization and suffix-array working memory.
+input_sentence_size = 500000
+shuffle_input_sentence = true
+
+[trainer]
+model_type = "unigram"
+vocab_size = 32768
+character_coverage = 0.9995
+byte_fallback = true
+seed_sentencepiece_size = 200000
+num_threads = 16
+max_sentence_length = 16384
+hard_vocab_limit = true
+
+# Fundamental tokenizer tokens.
+unk_id = 0
+bos_id = 1
+eos_id = 2
+pad_id = 3
+unk_piece = "<unk>"
+bos_piece = "<bos>"
+eos_piece = "<eos>"
+pad_piece = "<pad>"
+
+# Application / protocol tokens. These remain indivisible when present in text.
+user_defined_symbols = [
+    "<|system|>",
+    "<|user|>",
+    "<|assistant|>",
+    "<|thinking|>",
+    "<|end_thinking|>",
+    "<|tool_call|>",
+    "<|end_tool_call|>",
+    "<|tool_result|>",
+    "<|end_tool_result|>",
+]
+
+[output]
+directory = "artifacts/tokenizers/sangraha_ultrafineweb_l3_en_indic_unigram_v1"
+model_basename = "tokenizer"

@@ -17,6 +17,25 @@ Each document is stored as `BOS + encoded text + EOS`. The trainer memory-maps b
 samples random fixed-length windows, resets RoPE positions at document starts, and uses
 document-isolated causal attention. The loss for `EOS -> BOS` transitions is ignored.
 
+Estimate the available training tokens before packaging (the estimate uses the same per-document
+`BOS + text + EOS` convention):
+
+```bash
+uv run python scripts/estimate_parquet_tokens.py \
+  --tokenizer artifacts/tokenizers/sangraha_verified_sample_unigram_v1 \
+  /path/to/sangraha-verified-eng.parquet /path/to/sangraha-verified-indic.parquet
+```
+
+To materialize the first 1 million train rows from each requested English Ultra-FineWeb-L3 subset:
+
+```bash
+uv run python scripts/download_ultra_fineweb_l3.py
+```
+
+The resulting Parquet files contain only the source `content` normalized to a `text` column. The
+source `uid` is intentionally omitted: it is not used for training and is a high-cardinality UUID
+that adds storage. Pass `--keep-uid` only when provenance or later deduplication needs it.
+
 ```bash
 uv run python scripts/package_parquet_dataset.py \
   --tokenizer artifacts/tokenizers/sangraha_verified_sample_unigram_v1 \

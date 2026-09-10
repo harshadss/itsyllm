@@ -47,7 +47,14 @@ def load_config(path: Path) -> dict[str, Any]:
 class ParquetSentenceIterator:
     """Yield non-empty text values in bounded PyArrow record batches."""
 
-    def __init__(self, paths: list[Path], column: str, batch_rows: int, limit: int, max_sentence_length: int) -> None:
+    def __init__(
+        self,
+        paths: list[Path],
+        column: str,
+        batch_rows: int,
+        max_sentence_length: int,
+        limit: int | None = None,
+    ) -> None:
         self.paths = paths
         self.column = column
         self.batch_rows = batch_rows
@@ -72,7 +79,7 @@ class ParquetSentenceIterator:
                         continue
                     self.yielded += 1
                     yield text
-                    if self.yielded >= self.limit:
+                    if self.limit is not None and self.yielded >= self.limit:
                         return
 
 
@@ -100,9 +107,9 @@ def train(config_path: Path, output_override: Path | None, max_sentences: int | 
     if missing:
         raise FileNotFoundError("Missing input Parquet file(s):\n" + "\n".join(missing))
 
-    configured_limit = int(corpus["input_sentence_size"])
-    sentence_limit = min(configured_limit, max_sentences) if max_sentences else configured_limit
-    if sentence_limit <= 0:
+    configured_sample_size = int(corpus["input_sentence_size"])
+    sample_size = min(configured_sample_size, max_sentences) if max_sentences else configured_sample_size
+    if sample_size <= 0:
         raise ValueError("corpus.input_sentence_size must be positive")
     prepare_output(output, overwrite)
     temporary_dir = Path(tempfile.mkdtemp(prefix=f".{output.name}.", dir=output.parent))
@@ -111,17 +118,24 @@ def train(config_path: Path, output_override: Path | None, max_sentences: int | 
         paths,
         corpus["text_column"],
         int(corpus["batch_rows"]),
-        sentence_limit,
         int(trainer["max_sentence_length"]),
+        # Normally, pass every configured source to SentencePiece. Its
+        # input_sentence_size reservoir then samples across the full corpus,
+        # rather than taking only the first files in the configured order.
+        # --max-sentences remains a deliberately small, fast smoke-run cap.
+        limit=max_sentences,
     )
 
     trainer.update({
         "model_prefix": str(temporary_prefix),
-        "input_sentence_size": sentence_limit,
+        "input_sentence_size": sample_size,
         "shuffle_input_sentence": bool(corpus["shuffle_input_sentence"]),
     })
     try:
-        print(f"Training {config['metadata']['name']} on up to {sentence_limit:,} Parquet rows.")
+        print(
+            f"Training {config['metadata']['name']}: sampling {sample_size:,} rows "
+            f"while scanning all {len(paths):,} Parquet file(s)."
+        )
         # The Python bindings require an Iterator object, not merely an Iterable.
         spm.SentencePieceTrainer.train(sentence_iterator=iter(iterator), **trainer)
         if iterator.yielded == 0:
@@ -152,8 +166,9 @@ def train(config_path: Path, output_override: Path | None, max_sentences: int | 
             "config_path": str(config_path),
             "input_parquet_files": [str(path) for path in paths],
             "text_column": corpus["text_column"],
-            "requested_sentence_limit": sentence_limit,
-            "yielded_sentences": iterator.yielded,
+            "requested_sentence_limit": sample_size,
+            "source_sentences_read": iterator.yielded,
+            "max_sentences_override": max_sentences,
             "skipped_empty_or_null": iterator.empty_or_null,
             "skipped_too_long": iterator.too_long,
             "sentencepiece_version": spm.__version__,
