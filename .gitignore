@@ -4,3 +4,5 @@ __pycache__/
 
 artifacts/tokenizers/*
 !artifacts/tokenizers/.gitkeep
+artifacts/datasets/
+artifacts/checkpoints/
