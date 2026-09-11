@@ -2,11 +2,7 @@
 """Single-GPU pretraining for the decoder-only transformer.
 
 Example:
-    uv run python training/pretrain_lm.py \
-      --data artifacts/datasets/example.bin \
-      --tokenizer artifacts/tokenizers/example \
-      --output-dir artifacts/checkpoints/example \
-      --model-config extra-small --max-train-tokens 1000000000
+    uv run python training/pretrain_lm.py --config configs/training/example.toml
 """
 
 from __future__ import annotations
@@ -19,6 +15,7 @@ import os
 import random
 import sys
 import time
+import tomllib
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -34,6 +31,7 @@ from torch.utils.data import DataLoader, Dataset, get_worker_info
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from model import DecoderOnlyTransformer, model_config_from_name
+from training.tracking import create_tracker
 
 IGNORE_INDEX = -100
 
@@ -83,49 +81,181 @@ class TrainConfig:
     activation_checkpointing: bool
     compile_model: bool
     resume: Path | None
+    optimizer_name: str
+    optimizer_betas: tuple[float, float]
+    optimizer_eps: float
+    scheduler_name: str
+    wandb_mode: str
+    wandb_project: str | None
+    wandb_entity: str | None
+    wandb_run_name: str | None
 
 
-def parse_args() -> TrainConfig:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--data", required=True, type=Path, dest="data_path", help="Packager .bin output.")
-    parser.add_argument("--tokenizer", required=True, type=Path, dest="tokenizer_path", help="SentencePiece model or artifact directory.")
-    parser.add_argument("--output-dir", required=True, type=Path, help="Directory for the one rolling checkpoint.")
-    parser.add_argument("--model-config", default="extra-small", choices=("smoke", "extra-small", "extra-small-gqa"))
-    parser.add_argument(
-        "--context-length",
-        type=int,
-        help="Override the context length for this run (defaults to the selected model preset).",
-    )
-    parser.add_argument("--max-train-tokens", required=True, type=int)
-    parser.add_argument("--batch-size", type=int, default=1)
-    parser.add_argument("--gradient-accumulation-steps", type=int, default=16)
-    parser.add_argument("--learning-rate", type=float, default=3e-4)
-    parser.add_argument("--min-learning-rate", type=float, default=3e-5)
-    parser.add_argument("--warmup-tokens", type=int, default=100_000_000)
-    parser.add_argument("--weight-decay", type=float, default=0.1)
-    parser.add_argument("--num-workers", type=int, default=2)
-    parser.add_argument("--seed", type=int, default=1337)
-    parser.add_argument("--log-every-tokens", type=int, default=1_000_000)
-    parser.add_argument("--save-every-tokens", type=int, default=500_000_000)
-    parser.add_argument("--no-activation-checkpointing", action="store_false", dest="activation_checkpointing")
-    parser.add_argument("--no-compile", action="store_false", dest="compile_model")
-    parser.add_argument("--resume", type=Path, help="Checkpoint file to resume.")
-    parser.set_defaults(activation_checkpointing=True, compile_model=True)
-    args = parser.parse_args()
+class ConfigError(ValueError):
+    """A TOML experiment configuration is missing or has an invalid value."""
+
+
+_MISSING = object()
+
+
+def config_table(config_data: dict[str, Any], name: str) -> dict[str, Any]:
+    value = config_data.pop(name, _MISSING)
+    if value is _MISSING:
+        raise ConfigError(f"missing [{name}] table")
+    if not isinstance(value, dict):
+        raise ConfigError(f"[{name}] must be a table")
+    return value
+
+
+def config_value(
+    table: dict[str, Any],
+    table_name: str,
+    name: str,
+    expected_type: type[Any] | tuple[type[Any], ...],
+    default: Any = _MISSING,
+) -> Any:
+    value = table.pop(name, default)
+    if value is _MISSING:
+        raise ConfigError(f"missing [{table_name}].{name}")
+    if value is None and default is None:
+        return None
+    expected_types = expected_type if isinstance(expected_type, tuple) else (expected_type,)
+    if not isinstance(value, expected_types) or (isinstance(value, bool) and any(item in (int, float) for item in expected_types)):
+        expected_names = ", ".join(item.__name__ for item in expected_types)
+        raise ConfigError(f"[{table_name}].{name} must be {expected_names}")
+    return value
+
+
+def assert_no_unknown_keys(config_data: dict[str, Any], tables: dict[str, dict[str, Any]]) -> None:
+    unknown_tables = ", ".join(sorted(config_data))
+    if unknown_tables:
+        raise ConfigError(f"unknown top-level table(s): {unknown_tables}")
+    for table_name, table in tables.items():
+        if table:
+            unknown_keys = ", ".join(sorted(table))
+            raise ConfigError(f"unknown key(s) in [{table_name}]: {unknown_keys}")
+
+
+def resolve_config_path(config_path: Path, value: str) -> Path:
+    path = Path(value)
+    return (path if path.is_absolute() else config_path.parent / path).resolve()
+
+
+def validate_config(config: TrainConfig) -> TrainConfig:
     positive_names = (
         "max_train_tokens", "batch_size", "gradient_accumulation_steps", "learning_rate",
         "warmup_tokens", "log_every_tokens", "save_every_tokens",
     )
     for name in positive_names:
-        if getattr(args, name) <= 0:
-            parser.error(f"--{name.replace('_', '-')} must be positive")
-    if args.min_learning_rate < 0 or args.num_workers < 0:
-        parser.error("minimum learning rate and workers cannot be negative")
-    if args.context_length is not None and args.context_length <= 0:
-        parser.error("--context-length must be positive")
-    if args.min_learning_rate > args.learning_rate:
-        parser.error("--min-learning-rate cannot exceed --learning-rate")
-    return TrainConfig(**vars(args))
+        if getattr(config, name) <= 0:
+            raise ConfigError(f"{name.replace('_', ' ')} must be positive")
+    if config.min_learning_rate < 0 or config.num_workers < 0:
+        raise ConfigError("minimum learning rate and workers cannot be negative")
+    if config.context_length is not None and config.context_length <= 0:
+        raise ConfigError("context length must be positive")
+    if config.min_learning_rate > config.learning_rate:
+        raise ConfigError("minimum learning rate cannot exceed learning rate")
+    if config.optimizer_name != "adamw":
+        raise ConfigError("only optimizer.name = 'adamw' is currently supported")
+    if config.scheduler_name != "cosine":
+        raise ConfigError("only scheduler.name = 'cosine' is currently supported")
+    if any(beta < 0 or beta >= 1 for beta in config.optimizer_betas):
+        raise ConfigError("optimizer.betas values must be in [0, 1)")
+    if config.optimizer_eps <= 0:
+        raise ConfigError("optimizer.eps must be positive")
+    if config.wandb_mode not in ("disabled", "online", "offline"):
+        raise ConfigError("logging.wandb_mode must be disabled, online, or offline")
+    if config.wandb_mode != "disabled" and not config.wandb_project:
+        raise ConfigError("logging.wandb_project is required unless W&B is disabled")
+    return config
+
+
+def load_config(config_path: Path) -> TrainConfig:
+    try:
+        with config_path.open("rb") as config_file:
+            config_data = tomllib.load(config_file)
+    except FileNotFoundError as error:
+        raise ConfigError(f"configuration file not found: {config_path}") from error
+    except tomllib.TOMLDecodeError as error:
+        raise ConfigError(f"invalid TOML in {config_path}: {error}") from error
+
+    model = config_table(config_data, "model")
+    data = config_table(config_data, "data")
+    training = config_table(config_data, "training")
+    optimizer = config_table(config_data, "optimizer")
+    scheduler = config_table(config_data, "scheduler")
+    checkpointing = config_table(config_data, "checkpointing")
+    logging = config_table(config_data, "logging")
+
+    betas = config_value(optimizer, "optimizer", "betas", list, [0.9, 0.95])
+    if len(betas) != 2 or any(not isinstance(beta, (int, float)) or isinstance(beta, bool) for beta in betas):
+        raise ConfigError("[optimizer].betas must contain exactly two numbers")
+    config = TrainConfig(
+        data_path=resolve_config_path(config_path, config_value(data, "data", "path", str)),
+        tokenizer_path=resolve_config_path(config_path, config_value(data, "data", "tokenizer", str)),
+        output_dir=resolve_config_path(config_path, config_value(checkpointing, "checkpointing", "output_dir", str)),
+        model_config=config_value(model, "model", "preset", str, "extra-small"),
+        context_length=config_value(model, "model", "context_length", int, None),
+        max_train_tokens=config_value(training, "training", "max_train_tokens", int),
+        batch_size=config_value(training, "training", "batch_size", int, 1),
+        gradient_accumulation_steps=config_value(training, "training", "gradient_accumulation_steps", int, 16),
+        learning_rate=float(config_value(optimizer, "optimizer", "learning_rate", (int, float), 3e-4)),
+        min_learning_rate=float(config_value(scheduler, "scheduler", "min_learning_rate", (int, float), 3e-5)),
+        warmup_tokens=config_value(scheduler, "scheduler", "warmup_tokens", int, 100_000_000),
+        weight_decay=float(config_value(optimizer, "optimizer", "weight_decay", (int, float), 0.1)),
+        num_workers=config_value(data, "data", "num_workers", int, 2),
+        seed=config_value(training, "training", "seed", int, 1337),
+        log_every_tokens=config_value(logging, "logging", "log_every_tokens", int, 1_000_000),
+        save_every_tokens=config_value(checkpointing, "checkpointing", "save_every_tokens", int, 500_000_000),
+        activation_checkpointing=config_value(training, "training", "activation_checkpointing", bool, True),
+        compile_model=config_value(training, "training", "compile_model", bool, True),
+        resume=(
+            resolve_config_path(config_path, config_value(checkpointing, "checkpointing", "resume", str))
+            if "resume" in checkpointing
+            else None
+        ),
+        optimizer_name=config_value(optimizer, "optimizer", "name", str, "adamw"),
+        optimizer_betas=(float(betas[0]), float(betas[1])),
+        optimizer_eps=float(config_value(optimizer, "optimizer", "eps", (int, float), 1e-8)),
+        scheduler_name=config_value(scheduler, "scheduler", "name", str, "cosine"),
+        wandb_mode=config_value(logging, "logging", "wandb_mode", str, "disabled"),
+        wandb_project=config_value(logging, "logging", "wandb_project", str, None),
+        wandb_entity=config_value(logging, "logging", "wandb_entity", str, None),
+        wandb_run_name=config_value(logging, "logging", "wandb_run_name", str, None),
+    )
+    assert_no_unknown_keys(
+        config_data,
+        {
+            "model": model,
+            "data": data,
+            "training": training,
+            "optimizer": optimizer,
+            "scheduler": scheduler,
+            "checkpointing": checkpointing,
+            "logging": logging,
+        },
+    )
+    return validate_config(config)
+
+
+def parse_args() -> TrainConfig:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--config", required=True, type=Path, help="TOML experiment configuration.")
+    parser.add_argument("--resume", type=Path, help="Override checkpointing.resume for this invocation.")
+    parser.add_argument("--output-dir", type=Path, help="Override checkpointing.output_dir for this invocation.")
+    parser.add_argument("--wandb-mode", choices=("disabled", "online", "offline"), help="Override logging.wandb_mode for this invocation.")
+    args = parser.parse_args()
+    try:
+        config = load_config(args.config.resolve())
+        if args.resume is not None:
+            config.resume = args.resume.resolve()
+        if args.output_dir is not None:
+            config.output_dir = args.output_dir.resolve()
+        if args.wandb_mode is not None:
+            config.wandb_mode = args.wandb_mode
+        return validate_config(config)
+    except ConfigError as error:
+        parser.error(str(error))
 
 
 class RandomWindowDataset(Dataset[dict[str, Tensor]]):
@@ -284,7 +414,14 @@ def train(config: TrainConfig) -> None:
     model.set_gradient_checkpointing(config.activation_checkpointing)
     parameter_count = model.parameter_count()
     print(f"Model: {config.model_config} with {parameter_count:,} parameters.")
-    optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate, betas=(0.9, 0.95), weight_decay=config.weight_decay, fused=True)
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=config.learning_rate,
+        betas=config.optimizer_betas,
+        eps=config.optimizer_eps,
+        weight_decay=config.weight_decay,
+        fused=True,
+    )
     trained_tokens = 0
     optimizer_steps = 0
     if config.resume:
@@ -292,6 +429,38 @@ def train(config: TrainConfig) -> None:
         print(f"Resumed from {config.resume} at {trained_tokens:,} tokens.")
     training_model = torch.compile(model) if config.compile_model else model
     torch.cuda.reset_peak_memory_stats(device)
+
+    tracking_train_config = asdict(config)
+    # Paths are operational details, not useful experiment metadata, and may be sensitive.
+    for field in (
+        "data_path",
+        "tokenizer_path",
+        "output_dir",
+        "resume",
+        "wandb_project",
+        "wandb_entity",
+        "wandb_run_name",
+    ):
+        tracking_train_config.pop(field)
+    tracker = create_tracker(
+        mode=config.wandb_mode,
+        project=config.wandb_project,
+        entity=config.wandb_entity,
+        run_name=config.wandb_run_name,
+        output_dir=config.output_dir.resolve(),
+        stage="pretrain",
+        run_config={
+            "stage": "pretrain",
+            "train": tracking_train_config,
+            "model": model_config.to_dict(),
+            "dataset": {
+                "document_count": int(dataset.metadata["document_count"]),
+                "token_count": dataset.token_count,
+                "tokenizer_vocab_size": tokenizer.vocab_size(),
+            },
+            "parameter_count": parameter_count,
+        },
+    )
 
     checkpoint_path = config.output_dir / "checkpoint.pt"
     next_log_tokens = trained_tokens + config.log_every_tokens
@@ -322,7 +491,7 @@ def train(config: TrainConfig) -> None:
                 if trained_tokens >= config.max_train_tokens:
                     break
 
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            gradient_norm = float(torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0).item())
             learning_rate = learning_rate_at(trained_tokens, config)
             for group in optimizer.param_groups:
                 group["lr"] = learning_rate
@@ -347,6 +516,22 @@ def train(config: TrainConfig) -> None:
                     f"tokens={trained_tokens:,} step={optimizer_steps:,} loss={mean_loss:.4f} "
                     f"ppl={math.exp(min(mean_loss, 20.0)):.2f} lr={learning_rate:.3e} tok/s={throughput:,.0f}"
                 )
+                gib = 1024**3
+                tracker.log(
+                    {
+                        "train/tokens": trained_tokens,
+                        "train/optimizer_step": optimizer_steps,
+                        "train/loss": mean_loss,
+                        "train/perplexity": math.exp(min(mean_loss, 20.0)),
+                        "train/learning_rate": learning_rate,
+                        "train/tokens_per_second": throughput,
+                        "train/gradient_norm": gradient_norm,
+                        "system/gpu_allocated_gib": torch.cuda.memory_allocated(device) / gib,
+                        "system/gpu_reserved_gib": torch.cuda.memory_reserved(device) / gib,
+                        "system/gpu_peak_allocated_gib": torch.cuda.max_memory_allocated(device) / gib,
+                        "system/gpu_peak_reserved_gib": torch.cuda.max_memory_reserved(device) / gib,
+                    }
+                )
                 loss_total = 0.0
                 metric_tokens = 0
                 started_at = time.monotonic()
@@ -363,6 +548,10 @@ def train(config: TrainConfig) -> None:
         shutdown_workers = getattr(data_iterator, "_shutdown_workers", None)
         if shutdown_workers is not None:
             shutdown_workers()
+        try:
+            tracker.finish()
+        except Exception as error:
+            print(f"W&B finalization failed: {error}", file=sys.stderr)
     save_checkpoint(checkpoint_path, model, optimizer, config, model_config.to_dict(), trained_tokens, optimizer_steps)
 
 

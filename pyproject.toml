@@ -15,6 +15,11 @@ dependencies = [
     "torch==2.12.1",
 ]
 
+[project.optional-dependencies]
+wandb = [
+    "wandb>=0.22",
+]
+
 [tool.uv.sources]
 torch = { index = "pytorch-cu126" }
 

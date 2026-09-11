@@ -1,0 +1,42 @@
+# Paths are relative to this file, not the directory from which the trainer runs.
+
+[model]
+preset = "extra-small-gqa"
+# context_length = 4096
+
+[data]
+path = "../../artifacts/datasets/example.bin"
+tokenizer = "../../artifacts/tokenizers/example"
+num_workers = 2
+
+[training]
+max_train_tokens = 1_000_000_000
+batch_size = 1
+gradient_accumulation_steps = 16
+seed = 1337
+activation_checkpointing = true
+compile_model = true
+
+[optimizer]
+name = "adamw"
+learning_rate = 3e-4
+weight_decay = 0.1
+betas = [0.9, 0.95]
+eps = 1e-8
+
+[scheduler]
+name = "cosine"
+min_learning_rate = 3e-5
+warmup_tokens = 100_000_000
+
+[checkpointing]
+output_dir = "../../artifacts/checkpoints/example"
+save_every_tokens = 500_000_000
+# resume = "../../artifacts/checkpoints/example/checkpoint.pt"
+
+[logging]
+log_every_tokens = 1_000_000
+wandb_mode = "disabled"
+# wandb_project = "itsyllm"
+# wandb_entity = "your-team"
+# wandb_run_name = "extra-small-gqa-example"

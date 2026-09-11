@@ -42,20 +42,16 @@ uv run python scripts/package_parquet_dataset.py \
   --output artifacts/datasets/sangraha-eng.bin \
   /path/to/sangraha-verified-eng.parquet
 
-uv run python training/pretrain_lm.py \
-  --data artifacts/datasets/sangraha-eng.bin \
-  --tokenizer artifacts/tokenizers/sangraha_verified_sample_unigram_v1 \
-  --output-dir artifacts/checkpoints/first-run \
-  --model-config extra-small-gqa \
-  --context-length 4096 \
-  --max-train-tokens 2500000000 \
-  --warmup-tokens 50000000
+cp configs/training/example.toml configs/training/first-run.toml
+# Edit configs/training/first-run.toml for the dataset, tokenizer, and run settings.
+uv run python training/pretrain_lm.py --config configs/training/first-run.toml
 ```
 
 `extra-small` is the first 8,192-token model: 16 layers, hidden size 768, 12 query heads of 64
 dimensions each, and one KV head (MQA). Use `extra-small-gqa` for three KV heads (one KV head per
-four query heads), or `smoke` for a short functional test. Pass `--context-length` to make a
-run-specific context-length override; the preset itself remains 8,192 tokens. The trainer
-uses BF16 autocast, FP32 parameters and optimizer state, activation checkpointing, `torch.compile`,
-pinned-memory data loading, and one rolling checkpoint at `checkpoint.pt`. Checkpoints default to
-once per 500 million training tokens to limit disk use.
+four query heads), or `smoke` for a short functional test. The TOML separates model, data,
+training, optimizer, scheduler, checkpointing, and logging settings; paths are relative to the
+TOML file. The CLI accepts `--resume`, `--output-dir`, and `--wandb-mode` as invocation-only
+overrides. The trainer uses BF16 autocast, FP32 parameters and optimizer state, activation
+checkpointing, `torch.compile`, pinned-memory data loading, and one rolling checkpoint at
+`checkpoint.pt`. Checkpoints default to once per 500 million training tokens to limit disk use.
