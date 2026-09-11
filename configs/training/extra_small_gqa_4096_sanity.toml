@@ -3,7 +3,7 @@ preset = "extra-small-gqa"
 context_length = 4096
 
 [data]
-path = "../../../Datasets/itsyllm/sangraha_ultrafineweb_5m_10092026.bin"
+path = "../../../../Datasets/itsyllm/sangraha_ultrafineweb_5m_10092026.bin"
 tokenizer = "../../artifacts/tokenizers/sangraha_ultrafineweb_l3_en_indic_unigram_v1"
 num_workers = 2
 
@@ -33,6 +33,6 @@ save_every_tokens = 100_000_000
 
 [logging]
 log_every_tokens = 100_000
-wandb_mode = "online"
+wandb_mode = "disabled"
 wandb_project = "itsyllm"
 wandb_run_name = "extra-small-gqa-4096-sanity"
