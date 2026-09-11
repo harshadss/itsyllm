@@ -21,11 +21,18 @@ class RMSNorm(nn.Module):
         self.eps = eps
 
     def forward(self, hidden_states: Tensor) -> Tensor:
-        input_dtype = hidden_states.dtype
-        hidden_states = hidden_states.float()
-        variance = hidden_states.square().mean(dim=-1, keepdim=True)
-        hidden_states = hidden_states * torch.rsqrt(variance + self.eps)
-        return (self.weight * hidden_states).to(input_dtype)
+        # Educational reference implementation:
+        # input_dtype = hidden_states.dtype
+        # hidden_states = hidden_states.float()
+        # variance = hidden_states.square().mean(dim=-1, keepdim=True)
+        # hidden_states = hidden_states * torch.rsqrt(variance + self.eps)
+        # return (self.weight * hidden_states).to(input_dtype)
+        return F.rms_norm(
+            hidden_states,
+            (self.weight.numel(),),
+            self.weight.to(dtype=hidden_states.dtype),
+            self.eps,
+        )
 
 
 def rotate_half(hidden_states: Tensor) -> Tensor:

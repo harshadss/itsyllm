@@ -12,6 +12,7 @@ Example:
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import math
 import os
@@ -44,6 +45,21 @@ def tokenizer_model_path(path: Path) -> Path:
 def dataset_sidecars(data_path: Path) -> tuple[Path, Path]:
     stem = data_path.with_suffix("")
     return stem.with_name(stem.name + ".document_offsets.bin"), stem.with_suffix(".json")
+
+
+def acquire_output_lock(output_dir: Path) -> Any:
+    """Prevent two trainers from writing the same rolling checkpoint."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    lock = (output_dir / ".training.lock").open("w", encoding="utf-8")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as error:
+        lock.close()
+        raise RuntimeError(
+            f"Another trainer already owns {output_dir}. "
+            "Use a different --output-dir or stop the existing run first."
+        ) from error
+    return lock
 
 
 @dataclass
@@ -233,6 +249,7 @@ def load_checkpoint(path: Path, model: DecoderOnlyTransformer, optimizer: torch.
 def train(config: TrainConfig) -> None:
     if not torch.cuda.is_available():
         raise RuntimeError("This first trainer requires one CUDA GPU.")
+    output_lock = acquire_output_lock(config.output_dir.resolve())
     torch.set_float32_matmul_precision("high")
     torch.manual_seed(config.seed)
     random.seed(config.seed)
@@ -341,6 +358,11 @@ def train(config: TrainConfig) -> None:
         print("Interrupted; saving the rolling checkpoint.")
         save_checkpoint(checkpoint_path, model, optimizer, config, model_config.to_dict(), trained_tokens, optimizer_steps)
         raise
+    finally:
+        # Persistent workers otherwise survive until interpreter teardown after an error.
+        shutdown_workers = getattr(data_iterator, "_shutdown_workers", None)
+        if shutdown_workers is not None:
+            shutdown_workers()
     save_checkpoint(checkpoint_path, model, optimizer, config, model_config.to_dict(), trained_tokens, optimizer_steps)
 
 
