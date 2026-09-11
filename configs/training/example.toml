@@ -3,6 +3,8 @@
 [model]
 preset = "extra-small-gqa"
 # context_length = 4096
+# Applies each unique decoder block twice consecutively without adding parameters.
+repeat_blocks = false
 
 [data]
 path = "../../artifacts/datasets/example.bin"

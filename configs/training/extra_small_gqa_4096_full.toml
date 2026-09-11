@@ -1,14 +1,15 @@
 [model]
 preset = "extra-small-gqa"
 context_length = 4096
+repeat_blocks = true
 
 [data]
-path = "../../../Datasets/itsyllm/sangraha_ultrafineweb_5m_10092026.bin"
+path = "../../../../Datasets/itsyllm/sangraha_ultrafineweb_5m_10092026.bin"
 tokenizer = "../../artifacts/tokenizers/sangraha_ultrafineweb_l3_en_indic_unigram_v1"
 num_workers = 2
 
 [training]
-max_train_tokens = 3_000_000_000
+max_train_tokens = 2_500_000_000
 batch_size = 8
 gradient_accumulation_steps = 4
 seed = 1337
@@ -16,7 +17,7 @@ activation_checkpointing = true
 compile_model = true
 
 [optimizer]
-name = "adamw"
+name = "adamw8bit"
 learning_rate = 3e-4
 weight_decay = 0.1
 betas = [0.9, 0.95]
@@ -35,4 +36,4 @@ save_every_tokens = 100_000_000
 log_every_tokens = 1_000_000
 wandb_mode = "online"
 wandb_project = "itsyllm"
-wandb_run_name = "extra-small-gqa-4096-v1"
+wandb_run_name = "extra-small-gqa-4096-v2-repeat-blocks"

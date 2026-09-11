@@ -19,7 +19,7 @@ nvidia-smi -l 2
 
 # Full run: start this only after the sanity run finishes cleanly. The context is
 # 4,096, model is extra-small GQA, and the run trains for 3B tokens.
-FULL_RUN_LOG="logs/pretrain_extra_small_gqa_4096_v1_$(date +%F_%H%M%S).log"
+FULL_RUN_LOG="logs/pretrain_extra_small_gqa_4096_v2_no_repeat_blocks_$(date +%F_%H%M%S).log"
 nohup uv run python -u training/pretrain_lm.py \
   --config configs/training/extra_small_gqa_4096_full.toml \
   > "$FULL_RUN_LOG" 2>&1 < /dev/null &

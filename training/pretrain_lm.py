@@ -67,6 +67,7 @@ class TrainConfig:
     output_dir: Path
     model_config: str
     context_length: int | None
+    repeat_blocks: bool
     max_train_tokens: int
     batch_size: int
     gradient_accumulation_steps: int
@@ -155,8 +156,8 @@ def validate_config(config: TrainConfig) -> TrainConfig:
         raise ConfigError("context length must be positive")
     if config.min_learning_rate > config.learning_rate:
         raise ConfigError("minimum learning rate cannot exceed learning rate")
-    if config.optimizer_name != "adamw":
-        raise ConfigError("only optimizer.name = 'adamw' is currently supported")
+    if config.optimizer_name not in ("adamw", "adamw8bit"):
+        raise ConfigError("optimizer.name must be 'adamw' or 'adamw8bit'")
     if config.scheduler_name != "cosine":
         raise ConfigError("only scheduler.name = 'cosine' is currently supported")
     if any(beta < 0 or beta >= 1 for beta in config.optimizer_betas):
@@ -196,6 +197,7 @@ def load_config(config_path: Path) -> TrainConfig:
         output_dir=resolve_config_path(config_path, config_value(checkpointing, "checkpointing", "output_dir", str)),
         model_config=config_value(model, "model", "preset", str, "extra-small"),
         context_length=config_value(model, "model", "context_length", int, None),
+        repeat_blocks=config_value(model, "model", "repeat_blocks", bool, False),
         max_train_tokens=config_value(training, "training", "max_train_tokens", int),
         batch_size=config_value(training, "training", "batch_size", int, 1),
         gradient_accumulation_steps=config_value(training, "training", "gradient_accumulation_steps", int, 16),
@@ -376,6 +378,22 @@ def load_checkpoint(path: Path, model: DecoderOnlyTransformer, optimizer: torch.
     return int(checkpoint_data["trained_tokens"]), int(checkpoint_data["optimizer_steps"])
 
 
+def create_optimizer(model: DecoderOnlyTransformer, config: TrainConfig) -> torch.optim.Optimizer:
+    optimizer_kwargs = {
+        "lr": config.learning_rate,
+        "betas": config.optimizer_betas,
+        "eps": config.optimizer_eps,
+        "weight_decay": config.weight_decay,
+    }
+    if config.optimizer_name == "adamw":
+        return torch.optim.AdamW(model.parameters(), fused=True, **optimizer_kwargs)
+    if config.optimizer_name == "adamw8bit":
+        import bitsandbytes as bnb
+
+        return bnb.optim.AdamW8bit(model.parameters(), **optimizer_kwargs)
+    raise AssertionError(f"unsupported optimizer: {config.optimizer_name}")
+
+
 def train(config: TrainConfig) -> None:
     if not torch.cuda.is_available():
         raise RuntimeError("This first trainer requires one CUDA GPU.")
@@ -393,8 +411,11 @@ def train(config: TrainConfig) -> None:
     if tokenizer.bos_id() < 0:
         raise ValueError("Tokenizer must define a BOS ID.")
     model_config = model_config_from_name(config.model_config, tokenizer.vocab_size())
-    if config.context_length is not None:
-        model_config = replace(model_config, max_context_length=config.context_length)
+    model_config = replace(
+        model_config,
+        max_context_length=config.context_length or model_config.max_context_length,
+        repeat_blocks=config.repeat_blocks,
+    )
     dataset = RandomWindowDataset(config.data_path.resolve(), model_config.max_context_length, tokenizer.bos_id(), config.seed)
     if dataset.metadata["tokenizer_vocab_size"] != tokenizer.vocab_size():
         raise ValueError("Dataset vocabulary size does not match the tokenizer.")
@@ -414,14 +435,7 @@ def train(config: TrainConfig) -> None:
     model.set_gradient_checkpointing(config.activation_checkpointing)
     parameter_count = model.parameter_count()
     print(f"Model: {config.model_config} with {parameter_count:,} parameters.")
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=config.learning_rate,
-        betas=config.optimizer_betas,
-        eps=config.optimizer_eps,
-        weight_decay=config.weight_decay,
-        fused=True,
-    )
+    optimizer = create_optimizer(model, config)
     trained_tokens = 0
     optimizer_steps = 0
     if config.resume:

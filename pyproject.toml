@@ -8,6 +8,7 @@ authors = [
 ]
 requires-python = ">=3.13"
 dependencies = [
+    "bitsandbytes>=0.50.2",
     "datasets>=4.0.0",
     "huggingface-hub>=0.30.0",
     "pyarrow>=18.0.0",

@@ -164,4 +164,10 @@ class DecoderOnlyTransformer(nn.Module):
                 hidden_states = checkpoint(layer_forward, hidden_states, use_reentrant=False)
             else:
                 hidden_states = layer(hidden_states, position_ids, block_mask)
+            if self.config.repeat_blocks:
+                if self.gradient_checkpointing and self.training:
+                    layer_forward = lambda states, layer=layer: layer(states, position_ids, block_mask)
+                    hidden_states = checkpoint(layer_forward, hidden_states, use_reentrant=False)
+                else:
+                    hidden_states = layer(hidden_states, position_ids, block_mask)
         return self.lm_head(self.norm(hidden_states))

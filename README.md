@@ -52,6 +52,8 @@ dimensions each, and one KV head (MQA). Use `extra-small-gqa` for three KV heads
 four query heads), or `smoke` for a short functional test. The TOML separates model, data,
 training, optimizer, scheduler, checkpointing, and logging settings; paths are relative to the
 TOML file. The CLI accepts `--resume`, `--output-dir`, and `--wandb-mode` as invocation-only
-overrides. The trainer uses BF16 autocast, FP32 parameters and optimizer state, activation
-checkpointing, `torch.compile`, pinned-memory data loading, and one rolling checkpoint at
-`checkpoint.pt`. Checkpoints default to once per 500 million training tokens to limit disk use.
+overrides. Set `[model].repeat_blocks = true` to apply each unique decoder block twice
+consecutively with shared weights, doubling effective depth without increasing parameter count.
+The trainer uses BF16 autocast, FP32 parameters and optimizer state, activation checkpointing,
+`torch.compile`, pinned-memory data loading, and one rolling checkpoint at `checkpoint.pt`.
+Checkpoints default to once per 500 million training tokens to limit disk use.

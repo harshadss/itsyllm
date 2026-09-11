@@ -16,6 +16,7 @@ class ModelConfig:
     max_context_length: int
     rope_theta: float = 500_000.0
     rms_norm_eps: float = 1e-6
+    repeat_blocks: bool = False
 
     @property
     def head_dim(self) -> int:
@@ -23,7 +24,7 @@ class ModelConfig:
             raise ValueError("hidden_size must be divisible by num_attention_heads")
         return self.hidden_size // self.num_attention_heads
 
-    def to_dict(self) -> dict[str, int | float]:
+    def to_dict(self) -> dict[str, int | float | bool]:
         return asdict(self)
 
 

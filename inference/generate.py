@@ -39,8 +39,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tokenizer", required=True, type=Path, help="SentencePiece model or tokenizer artifact directory.")
     parser.add_argument("--prompt", required=True, help="Text to complete.")
     parser.add_argument("--max-new-tokens", type=int, default=128, help="Maximum generated tokens (default: 128).")
-    parser.add_argument("--temperature", type=float, default=1.2, help="Sampling temperature; 0 selects greedily (default: 0.8).")
-    parser.add_argument("--top-k", type=int, default=50, help="Keep this many most likely tokens; 0 disables it (default: 50).")
+    parser.add_argument("--temperature", type=float, default=1.0, help="Sampling temperature; 0 selects greedily (default: 0.8).")
+    parser.add_argument("--top-k", type=int, default=128, help="Keep this many most likely tokens; 0 disables it (default: 50).")
     parser.add_argument("--top-p", type=float, default=0.95, help="Nucleus sampling probability; 1 disables it (default: 0.95).")
     parser.add_argument(
         "--early-stopping",
