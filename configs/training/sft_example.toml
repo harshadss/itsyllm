@@ -1,0 +1,44 @@
+# Paths are relative to this file, not the directory from which the trainer runs.
+
+[model]
+# Omit this to use the maximum context saved in the pretrained checkpoint.
+# context_length = 4096
+
+[data]
+path = "/home/harshad/Workspace/Learning/DeepLearning/Datasets/itsyllm/sft/sft.bin"
+tokenizer = "../../artifacts/tokenizers/sangraha_ultrafineweb_l3_en_indic_unigram_v1"
+num_workers = 2
+
+[training]
+epochs = 1
+batch_size = 1
+gradient_accumulation_steps = 4
+seed = 1337
+activation_checkpointing = true
+compile_model = true
+gradient_clip_norm = 1.0
+
+[optimizer]
+name = "adamw"
+learning_rate = 2e-5
+weight_decay = 0.0
+betas = [0.9, 0.95]
+eps = 1e-8
+
+[scheduler]
+name = "cosine"
+min_learning_rate = 0.0
+warmup_fraction = 0.03
+
+[checkpointing]
+init_checkpoint = "../../artifacts/checkpoints/extra_small_gqa_4096_v2/checkpoint.pt"
+output_dir = "../../artifacts/checkpoints/extra_small_gqa_4096_sft_v1"
+save_every_supervised_tokens = 1_000_000
+# resume = "../../artifacts/checkpoints/extra_small_gqa_4096_sft_v1/checkpoint.pt"
+
+[logging]
+log_every_supervised_tokens = 100_000
+wandb_mode = "disabled"
+# wandb_project = "itsyllm"
+# wandb_entity = "your-team"
+# wandb_run_name = "extra-small-gqa-4096-sft-v1"

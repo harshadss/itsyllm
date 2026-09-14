@@ -27,6 +27,31 @@ nohup uv run python -u training/pretrain_lm.py \
 # Monitor the full run.
 tail -f "$FULL_RUN_LOG"
 
+# SFT: CPU-only packed-data correctness test. Run this after packaging and
+# before occupying the GPU; it checks shifted masks, boundary isolation,
+# RoPE-position resets, and terminal-EOS supervision.
+uv run python training/sft_train.py --self-test
+
+# SFT sanity run: exactly three optimizer updates using the packaged dataset.
+# Check the log and GPU memory before starting the full fine-tune.
+SFT_SANITY_LOG="logs/sft_extra_small_gqa_4096_sanity_$(date +%F_%H%M%S).log"
+nohup uv run python -u training/sft_train.py \
+  --config configs/training/sft_sanity.toml \
+  > "$SFT_SANITY_LOG" 2>&1 < /dev/null &
+
+# Monitor the SFT sanity run.
+tail -f "$SFT_SANITY_LOG"
+
+# SFT full run: starts from the pretrained v2 checkpoint and trains for the
+# configured complete epoch(s) over the packed SFT data.
+SFT_FULL_LOG="logs/sft_extra_small_gqa_4096_v1_$(date +%F_%H%M%S).log"
+nohup uv run python -u training/sft_train.py \
+  --config configs/training/sft_full_run_v1.toml \
+  > "$SFT_FULL_LOG" 2>&1 < /dev/null &
+
+# Monitor the full SFT run.
+tail -f "$SFT_FULL_LOG"
+
 # Inference: run after stopping training on this single-GPU machine, or on a
 # different GPU. The rolling checkpoint is first created at 100M training tokens.
 uv run python inference/generate.py \
