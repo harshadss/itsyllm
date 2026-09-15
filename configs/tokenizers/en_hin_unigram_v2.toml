@@ -1,0 +1,52 @@
+[metadata]
+name = "en_hin_unigram_v2"
+description = "English & Hindi SentencePiece Unigram tokenizer trained on the Sangraha verified samples plus ultrafine web l2 and l3."
+
+[corpus]
+paths = [
+    "/home/harshad/Workspace/Learning/DeepLearning/Datasets/ai4bharat/sangraha/samples/verified/hin/sangraha-verified-hin-first-2000000.parquet",
+    "/home/harshad/Workspace/Learning/DeepLearning/Datasets/openbmb/ultra-fineweb/samples/en/ultra-fineweb-en-score-gt-0p7-shuffled-5000000.parquet",
+]
+text_column = "text"
+batch_rows = 8192
+# SentencePiece samples this many rows uniformly while scanning all files.
+# This bounds Unigram's normalization and suffix-array working memory.
+input_sentence_size = 500000
+shuffle_input_sentence = true
+
+[trainer]
+model_type = "unigram"
+vocab_size = 32768
+character_coverage = 0.995
+byte_fallback = true
+seed_sentencepiece_size = 200000
+num_threads = 16
+max_sentence_length = 8192
+hard_vocab_limit = true
+
+# Fundamental tokenizer tokens.
+unk_id = 0
+bos_id = 1
+eos_id = 2
+pad_id = 3
+unk_piece = "<unk>"
+bos_piece = "<bos>"
+eos_piece = "<eos>"
+pad_piece = "<pad>"
+
+# Application / protocol tokens. These remain indivisible when present in text.
+user_defined_symbols = [
+    "<|system|>",
+    "<|user|>",
+    "<|assistant|>",
+    "<|thinking|>",
+    "<|end_thinking|>",
+    "<|tool_call|>",
+    "<|end_tool_call|>",
+    "<|tool_result|>",
+    "<|end_tool_result|>",
+]
+
+[output]
+directory = "artifacts/tokenizers/en_hin_unigram_v2"
+model_basename = "tokenizer"
