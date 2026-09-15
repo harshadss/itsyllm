@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Generate a completion from a pretrained checkpoint.
+"""Generate an assistant response from an SFT checkpoint.
 
 Example:
     uv run python inference/generate.py \
       --checkpoint artifacts/checkpoints/extra_small_gqa_4096_v1/checkpoint.pt \
       --tokenizer artifacts/tokenizers/sangraha_ultrafineweb_l3_en_indic_unigram_v1 \
-      --prompt "भारत की राजधानी" --max-new-tokens 128
+      --user-input "भारत की राजधानी क्या है?" --max-new-tokens 128
 
-The checkpoint supplies the model architecture. Prompt context is trimmed from the
-left when necessary; the most recent tokens are retained.
+The input is rendered with the SFT chat template: ``BOS <|user|> question
+<|assistant|>``.  The checkpoint supplies the model architecture. Prompt context
+is trimmed from the left when necessary; the most recent tokens are retained.
 """
 
 from __future__ import annotations
@@ -29,6 +30,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from model import DecoderOnlyTransformer, ModelConfig
 
 
+USER_MARKER = "<|user|>"
+ASSISTANT_MARKER = "<|assistant|>"
+
+
 def tokenizer_model_path(path: Path) -> Path:
     return path / "tokenizer.model" if path.is_dir() else path
 
@@ -37,10 +42,16 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkpoint", required=True, type=Path, help="Trainer checkpoint.pt file.")
     parser.add_argument("--tokenizer", required=True, type=Path, help="SentencePiece model or tokenizer artifact directory.")
-    parser.add_argument("--prompt", required=True, help="Text to complete.")
+    input_group = parser.add_mutually_exclusive_group(required=True)
+    input_group.add_argument("--user-input", help="Question or message to place in the user turn.")
+    input_group.add_argument(
+        "--prompt",
+        dest="user_input",
+        help="Deprecated alias for --user-input.",
+    )
     parser.add_argument("--max-new-tokens", type=int, default=128, help="Maximum generated tokens (default: 128).")
-    parser.add_argument("--temperature", type=float, default=1.0, help="Sampling temperature; 0 selects greedily (default: 0.8).")
-    parser.add_argument("--top-k", type=int, default=128, help="Keep this many most likely tokens; 0 disables it (default: 50).")
+    parser.add_argument("--temperature", type=float, default=0.8, help="Sampling temperature; 0 selects greedily (default: 0.8).")
+    parser.add_argument("--top-k", type=int, default=64, help="Keep this many most likely tokens; 0 disables it (default: 50).")
     parser.add_argument("--top-p", type=float, default=0.95, help="Nucleus sampling probability; 1 disables it (default: 0.95).")
     parser.add_argument(
         "--early-stopping",
@@ -87,6 +98,19 @@ def trim_context(token_ids: list[int], max_context_length: int, bos_id: int) -> 
         return token_ids, False
     # Keep a BOS token at position zero while retaining the newest prompt tokens.
     return [bos_id, *token_ids[-(max_context_length - 1):]], True
+
+
+def require_special_token(tokenizer: spm.SentencePieceProcessor, piece: str) -> int:
+    """Return a protocol token ID, rejecting tokenizers that cannot encode it atomically."""
+    token_id = tokenizer.piece_to_id(piece)
+    if token_id < 0 or tokenizer.id_to_piece(token_id) != piece:
+        raise ValueError(f"Tokenizer is missing required SFT protocol piece {piece!r}.")
+    return token_id
+
+
+def render_sft_prompt(user_input: str) -> str:
+    """Match the user-to-assistant turn layout written by the SFT packager."""
+    return f"{USER_MARKER}\n{user_input}\n{ASSISTANT_MARKER}\n"
 
 
 def sample_token(logits: Tensor, temperature: float, top_k: int, top_p: float, generator: torch.Generator) -> int:
@@ -136,9 +160,12 @@ def main() -> None:
     tokenizer = spm.SentencePieceProcessor(model_file=str(tokenizer_path))
     if tokenizer.bos_id() < 0 or tokenizer.eos_id() < 0:
         raise ValueError("Tokenizer must define BOS and EOS token IDs.")
+    require_special_token(tokenizer, USER_MARKER)
+    require_special_token(tokenizer, ASSISTANT_MARKER)
 
     model = load_model(args.checkpoint.resolve(), tokenizer.vocab_size(), device)
-    token_ids = tokenizer.encode(args.prompt, out_type=int, add_bos=True, add_eos=False)
+    sft_prompt = render_sft_prompt(args.user_input)
+    token_ids = tokenizer.encode(sft_prompt, out_type=int, add_bos=True, add_eos=False)
     token_ids, prompt_trimmed = trim_context(token_ids, model.config.max_context_length, tokenizer.bos_id())
     if prompt_trimmed:
         print(f"Prompt exceeded {model.config.max_context_length:,} tokens; trimmed from the left.", file=sys.stderr)
@@ -162,8 +189,8 @@ def main() -> None:
             generated_ids.append(next_token)
 
     completion = tokenizer.decode(generated_ids)
-    print("Prompt:")
-    print(args.prompt)
+    print("User input:")
+    print(args.user_input)
     print("\nCompletion:")
     print(completion)
     print(f"\nGenerated tokens: {len(generated_ids)}", file=sys.stderr)
