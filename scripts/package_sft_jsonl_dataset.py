@@ -2,8 +2,8 @@
 """Render normalized SFT JSONL, chunk it, and write memory-mappable artifacts.
 
 Each JSONL record must contain an ordered ``messages`` array.  Messages are
-rendered with the project's role vocabulary, then tokenized as one complete
-conversation.  Long conversations are split into independent, overlapping
+rendered with the project's role vocabulary, with a supervised EOS token after
+every assistant response. Long conversations are split into independent, overlapping
 chunks.  Every output chunk has ``BOS`` and ``EOS`` boundaries, an offset entry
 that makes it a separate FlexAttention block, and a per-token SFT loss mask.
 
@@ -172,10 +172,13 @@ def append_fragment(parts: list[str], spans: list[tuple[int, int]], text: str, t
     return end
 
 
-def render_document(messages: list[dict[str, str]], system_prompt: str | None) -> tuple[str, list[tuple[int, int]]]:
-    """Render a conversation and byte spans whose tokens should receive SFT loss."""
+def render_document(
+    messages: list[dict[str, str]], system_prompt: str | None
+) -> tuple[str, list[tuple[int, int]], list[int]]:
+    """Render text, supervised byte spans, and assistant-turn end byte offsets."""
     parts: list[str] = []
     assistant_spans: list[tuple[int, int]] = []
+    assistant_turn_ends: list[int] = []
     byte_offset = 0
     if system_prompt is not None:
         byte_offset = append_fragment(parts, assistant_spans, f"{ROLE_MARKERS['system']}\n{system_prompt}\n", False, byte_offset)
@@ -192,7 +195,9 @@ def render_document(messages: list[dict[str, str]], system_prompt: str | None) -
             byte_offset = append_fragment(parts, assistant_spans, message["reasoning_content"] + "\n", True, byte_offset)
             byte_offset = append_fragment(parts, assistant_spans, f"{THINKING_MARKERS[1]}\n", True, byte_offset)
         byte_offset = append_fragment(parts, assistant_spans, message["content"] + "\n", trainable, byte_offset)
-    return "".join(parts), assistant_spans
+        if trainable:
+            assistant_turn_ends.append(byte_offset)
+    return "".join(parts), assistant_spans, assistant_turn_ends
 
 
 def spans_intersect(start: int, end: int, spans: list[tuple[int, int]]) -> bool:
@@ -203,18 +208,38 @@ def tokenize_document(
     tokenizer: spm.SentencePieceProcessor,
     rendered: str,
     assistant_spans: list[tuple[int, int]],
+    assistant_turn_ends: list[int],
 ) -> tuple[list[int], list[bool]]:
-    """Tokenize once and use SentencePiece byte offsets to assign exact labels."""
-    proto = tokenizer.encode(rendered, out_type="proto")
+    """Tokenize through each answer and append a supervised EOS ID directly.
+
+    SentencePiece control tokens must be inserted by ID, not encoded as text.
+    Splitting at turn ends also prevents pieces from spanning an EOS boundary.
+    """
+    encoded = rendered.encode("utf-8")
+    if not assistant_turn_ends or assistant_turn_ends[-1] != len(encoded):
+        raise ValueError("Conversation must end with an assistant turn.")
+    if tokenizer.eos_id() < 0:
+        raise ValueError("Tokenizer must define an EOS ID.")
     token_ids: list[int] = []
     loss_mask: list[bool] = []
-    for piece in proto.pieces:
-        token_ids.append(int(piece.id))
-        # SentencePiece's synthetic dummy-prefix piece has an empty byte span.
-        # It is context only, never a supervised target.
-        loss_mask.append(piece.begin < piece.end and spans_intersect(piece.begin, piece.end, assistant_spans))
-    if not token_ids:
-        raise ValueError("Tokenizer produced no tokens for a rendered non-empty conversation")
+    start = 0
+    for end in assistant_turn_ends:
+        if not start < end <= len(encoded):
+            raise ValueError("Assistant turn ends must be strictly increasing byte offsets.")
+        proto = tokenizer.encode(encoded[start:end].decode("utf-8"), out_type="proto")
+        if not proto.pieces:
+            raise ValueError("Tokenizer produced no tokens for a rendered non-empty turn")
+        for piece in proto.pieces:
+            token_ids.append(int(piece.id))
+            # Empty dummy-prefix pieces are context only. Convert segment-local
+            # byte offsets back to conversation offsets before applying the mask.
+            loss_mask.append(
+                piece.begin < piece.end
+                and spans_intersect(start + piece.begin, start + piece.end, assistant_spans)
+            )
+        token_ids.append(tokenizer.eos_id())
+        loss_mask.append(True)
+        start = end
     return token_ids, loss_mask
 
 
@@ -232,8 +257,13 @@ def iter_chunks(
     start = 0
     while start < len(token_ids):
         end = min(start + payload_size, len(token_ids))
-        chunk_ids = [bos_id, *token_ids[start:end], eos_id]
-        chunk_mask = [False, *loss_mask[start:end], end == len(token_ids)]
+        chunk_ids = [bos_id, *token_ids[start:end]]
+        chunk_mask = [False, *loss_mask[start:end]]
+        # Real turn-ending EOS already belongs to the payload and is supervised.
+        # Only artificial chunk terminators are masked; never duplicate EOS.
+        if chunk_ids[-1] != eos_id:
+            chunk_ids.append(eos_id)
+            chunk_mask.append(False)
         if start > 0:
             repeated_tokens = min(overlap, end - start)
             chunk_mask[1 : 1 + repeated_tokens] = [False] * repeated_tokens
@@ -311,8 +341,8 @@ def package(args: argparse.Namespace) -> None:
                         if not isinstance(row, dict):
                             raise ValueError(f"{input_path}:{line_number}: each JSONL line must be an object")
                         messages = validate_messages(row.get("messages"), input_path, line_number)
-                        rendered, assistant_spans = render_document(messages, system_prompt)
-                        content_ids, content_mask = tokenize_document(tokenizer, rendered, assistant_spans)
+                        rendered, assistant_spans, assistant_turn_ends = render_document(messages, system_prompt)
+                        content_ids, content_mask = tokenize_document(tokenizer, rendered, assistant_spans, assistant_turn_ends)
                         chunks = iter_chunks(
                             content_ids,
                             content_mask,
@@ -389,7 +419,8 @@ def package(args: argparse.Namespace) -> None:
                 "assistant_content_and_reasoning_delimiters_are_supervised": True,
                 "system_and_user_tokens_are_masked": True,
                 "overlap_tokens_are_masked_in_nonfirst_chunks": True,
-                "interior_chunk_eos_is_masked": True,
+                "assistant_turn_eos_is_supervised": True,
+                "artificial_chunk_eos_is_masked": True,
             },
             "output_durability": {"flush_every_chunks": args.flush_every, "fsync_after_flush": True},
         }

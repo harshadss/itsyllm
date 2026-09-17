@@ -1,15 +1,23 @@
 #!/usr/bin/env python3
-"""Generate an assistant response from an SFT checkpoint.
+"""Generate text from a pretraining or SFT checkpoint.
 
-Example:
+SFT example:
     uv run python inference/generate.py \
       --checkpoint artifacts/checkpoints/extra_small_gqa_4096_v1/checkpoint.pt \
       --tokenizer artifacts/tokenizers/sangraha_ultrafineweb_l3_en_indic_unigram_v1 \
       --user-input "भारत की राजधानी क्या है?" --max-new-tokens 128
 
-The input is rendered with the SFT chat template: ``BOS <|user|> question
-<|assistant|>``.  The checkpoint supplies the model architecture. Prompt context
-is trimmed from the left when necessary; the most recent tokens are retained.
+Pretraining example:
+    uv run python inference/generate.py \
+      --mode pretrain \
+      --checkpoint artifacts/checkpoints/extra_small_gqa_4096_v3/checkpoint.pt \
+      --tokenizer artifacts/tokenizers/en_hin_unigram_v2 \
+      --prompt "Once upon a time" --max-new-tokens 128
+
+SFT inputs are rendered as ``BOS <|user|> question <|assistant|>``. Pretraining
+prompts are encoded directly as ``BOS prompt`` and do not require chat tokens.
+The checkpoint supplies the model architecture. Prompt context is trimmed from
+the left when necessary; the most recent tokens are retained.
 """
 
 from __future__ import annotations
@@ -42,16 +50,21 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkpoint", required=True, type=Path, help="Trainer checkpoint.pt file.")
     parser.add_argument("--tokenizer", required=True, type=Path, help="SentencePiece model or tokenizer artifact directory.")
+    parser.add_argument(
+        "--mode",
+        choices=("sft", "pretrain"),
+        default="sft",
+        help="Prompt format to use (default: sft).",
+    )
     input_group = parser.add_mutually_exclusive_group(required=True)
-    input_group.add_argument("--user-input", help="Question or message to place in the user turn.")
+    input_group.add_argument("--user-input", help="Question or message to place in the SFT user turn.")
     input_group.add_argument(
         "--prompt",
-        dest="user_input",
-        help="Deprecated alias for --user-input.",
+        help="Raw prompt for pretraining mode; also accepted as an alias for --user-input in SFT mode.",
     )
     parser.add_argument("--max-new-tokens", type=int, default=128, help="Maximum generated tokens (default: 128).")
     parser.add_argument("--temperature", type=float, default=0.8, help="Sampling temperature; 0 selects greedily (default: 0.8).")
-    parser.add_argument("--top-k", type=int, default=64, help="Keep this many most likely tokens; 0 disables it (default: 50).")
+    parser.add_argument("--top-k", type=int, default=64, help="Keep this many most likely tokens; 0 disables it (default: 64).")
     parser.add_argument("--top-p", type=float, default=0.95, help="Nucleus sampling probability; 1 disables it (default: 0.95).")
     parser.add_argument(
         "--early-stopping",
@@ -74,6 +87,8 @@ def parse_args() -> argparse.Namespace:
         parser.error("--top-k must be non-negative")
     if not 0 < args.top_p <= 1:
         parser.error("--top-p must be in (0, 1]")
+    if args.mode == "pretrain" and args.prompt is None:
+        parser.error("--mode pretrain requires --prompt")
     return args
 
 
@@ -160,12 +175,19 @@ def main() -> None:
     tokenizer = spm.SentencePieceProcessor(model_file=str(tokenizer_path))
     if tokenizer.bos_id() < 0 or tokenizer.eos_id() < 0:
         raise ValueError("Tokenizer must define BOS and EOS token IDs.")
-    require_special_token(tokenizer, USER_MARKER)
-    require_special_token(tokenizer, ASSISTANT_MARKER)
+
+    if args.mode == "sft":
+        require_special_token(tokenizer, USER_MARKER)
+        require_special_token(tokenizer, ASSISTANT_MARKER)
+        input_text = args.user_input if args.user_input is not None else args.prompt
+        prompt = render_sft_prompt(input_text)
+    else:
+        input_text = args.prompt
+        prompt = input_text
+    assert input_text is not None and prompt is not None
 
     model = load_model(args.checkpoint.resolve(), tokenizer.vocab_size(), device)
-    sft_prompt = render_sft_prompt(args.user_input)
-    token_ids = tokenizer.encode(sft_prompt, out_type=int, add_bos=True, add_eos=False)
+    token_ids = tokenizer.encode(prompt, out_type=int, add_bos=True, add_eos=False)
     token_ids, prompt_trimmed = trim_context(token_ids, model.config.max_context_length, tokenizer.bos_id())
     if prompt_trimmed:
         print(f"Prompt exceeded {model.config.max_context_length:,} tokens; trimmed from the left.", file=sys.stderr)
@@ -189,8 +211,8 @@ def main() -> None:
             generated_ids.append(next_token)
 
     completion = tokenizer.decode(generated_ids)
-    print("User input:")
-    print(args.user_input)
+    print("User input:" if args.mode == "sft" else "Prompt:")
+    print(input_text)
     print("\nCompletion:")
     print(completion)
     print(f"\nGenerated tokens: {len(generated_ids)}", file=sys.stderr)
